@@ -1,4 +1,4 @@
-/*
+﻿/*
     VR Renderer for Virt-a-Mate
     by Eosin
     License: CC BY-SA
@@ -8,7 +8,7 @@
 
     Uses LilyRender360 shader created by Elie Michel, licensed under MIT License.
     https://github.com/eliemichel/LilyRender360
-    
+	
     Contains patch for multi-threaded image encoding and TCP video streaming by yunidatsu.
 	
     v15
@@ -156,31 +156,27 @@
     // total png: 1485
  */
 
-using UnityEngine;
-using UnityEngine.XR;
-using UnityEngine.UI;
-using UnityEngine.Events;
-using UnityEngine.PostProcessing;
+using MacGruber;
+using MeshVR;
+using noone77521;
+using MVR.FileManagementSecure;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
-using System;
-using System.Diagnostics;
+using Unity.Collections;
+using UnityEngine;
+using UnityEngine.PostProcessing;
+using UnityEngine.Rendering;
+using UnityEngine.Video;
+using Request = MeshVR.AssetLoader.AssetBundleFromFileRequest;
+using System.Threading;
 using System.Net;
 using System.Net.Sockets;
-using MeshVR;
-using MVR.FileManagementSecure;
-using MacGruber;
-using Request = MeshVR.AssetLoader.AssetBundleFromFileRequest;
-using UnityEngine.Video;
-using System.Threading;
-using UnityEngine.Rendering;
-using Unity.Collections;
-using UnityEngine.Audio;
 
 namespace Eosin
 {
-    public class VRRenderer : MVRScript
+    public partial class VRRenderer : MVRScript
     {
         private const int STATE_SETUP = 0;
         private const int STATE_PROCESS = 1;
@@ -390,14 +386,13 @@ namespace Eosin
         public const int STREAM_DISABLED = 0;
         public const int STREAM_ENABLED = 1;
         public const int STREAM_PLUS_IMAGES = 2;
-        
 
-        private static readonly int[] DEFAULT_RESOLUTION_IDX = new int[] { 1, 1, 0, 7, 2, 1, 7, 11 };
+        private static readonly int[] DEFAULT_RESOLUTION_IDX = new int[] { 1, 1, 0, 1, 2, 1, 7, 11 };
 
-        private const int DEFAULT_RENDERMODE_IDX = 1;
+        private const int DEFAULT_RENDERMODE_IDX = 0;
         private const float DEFAULT_IPD = 64;
-        private const int DEFAULT_ASPECTRATIO_IDX = 6;
-        private const int DEFAULT_MSAA_IDX = 1;
+        private const int DEFAULT_ASPECTRATIO_IDX = 3;
+        private const int DEFAULT_MSAA_IDX = 3;
         private const int DEFAULT_FORMAT = FORMAT_PNG;
         private const int DEFAULT_FRAMERATE_IDX = 4;
 
@@ -428,9 +423,9 @@ namespace Eosin
         private int frameCounter = 0;
         private static int frameRateInt = 60;
         private int frameRateIdx = DEFAULT_FRAMERATE_IDX;
-        string baseFilename = "";
-        string myDirectory = "";
-        bool generatedFilename = false;
+        //string baseFilename = "";
+        //string myDirectory = "";
+        //bool generatedFilename = false;
         UserPreferences.PhysicsRate oldFrameRate = UserPreferences.PhysicsRate._60;
         private int framesToSkip = 0;
         private int frameSkipCounter = 0;
@@ -441,6 +436,7 @@ namespace Eosin
         private Vector2Int finalResolution;
         JSONStorableBool VRAMWarningChooser;
         JSONStorableBool muteAudioChooser;
+        JSONStorableBool portaitMode;
         List<float> audioVolumes;
         List<AudioSource> audioSources; // Note: dictionary doesn't seem to complile in VaM plugin
         int previewResolution = 400;
@@ -488,8 +484,8 @@ namespace Eosin
         JSONStorableUrl seamTextureUrl;
         JSONStorableColor seamTextureTintChooser;
 
-        JSONStorableBool encThreadsToggle;
-        JSONStorableFloat numEncThreadsSlider;
+        JSONStorableBool enableThreadsToggle;
+        JSONStorableFloat numThreadsSlider;
 
         private JSONStorableStringChooser streamModeChooser;
         private JSONStorableString streamHostField;
@@ -503,7 +499,7 @@ namespace Eosin
         private FreeControllerV3 mySelectedController = null;
         private bool myNeedSetup = true;
 
-        public static readonly string SCREENSHOT_DIRECTORY = "Saves/VR_Renders/";
+        public static readonly string SCREENSHOT_DIRECTORY = "Saves/PluginData/mmd2timeline/Render/";
         string myLilyRenderBundleURL = null;
         string myDownsampleBundleURL = null;
 
@@ -550,7 +546,7 @@ namespace Eosin
         JSONStorableBool dazBvhScaleChooser;
         JSONStorableBool bvhStartsAtOrigin;
         JSONStorableBool bvhUseUnorientedSkeleton;
-        string lastFilename;
+        //string lastFilename;
 
         GameObject originalAudioListener;
         AudioVelocityUpdateMode originalVelocityUpdateMode;
@@ -561,10 +557,12 @@ namespace Eosin
         Camera renderCam, previewCamera;
         GameObject renderCamParentObj;
         Material sliceEquirectMat, _equirectMat, _equirectMatAlpha, _equirectMatRotate, _equirectMatRotateTriangle, myConvolutionMaterial, alphaDiffMat;
+        //Texture2D finalOutputTexture;
         Texture2D[] finalOutputTextures;
         bool encThreadingEnabled;
         bool[] encThreadFreeFlags;
         Semaphore encThreadSem;
+
         RenderTexture equirectL, equirectR;
         RenderTexture flatRenderTex, passTexture, outputRenderTexture;
         RenderTexture flatRenderTexBlack, flatRenderTexWhite, blackBgRenderTex, whiteBgRenderTex;
@@ -572,6 +570,8 @@ namespace Eosin
         RenderTexture previewTex, previewTexBlack, previewTexWhite;
         Texture2D blackTex, semiTex, clearTex;
         Texture2D previewBackground;
+
+        JSONStorableFloat _secondsToRecordChooser;
 
         private bool streamVideoEnabled;
         private bool saveVideoEnabled;
@@ -598,6 +598,8 @@ namespace Eosin
 
         public override void Init()
         {
+            Lang.Init(Utils.GetPluginPath(this));
+
             myNeedSetup = true;
 
             myLilyRenderBundleURL = Utils.GetPluginPath(this) + "/VRRenderer.shaderbundle";
@@ -620,7 +622,7 @@ namespace Eosin
             previewCamera = CreateFlatCamera(containingAtom.mainController.transform);
             previewCamera.clearFlags = CameraClearFlags.SolidColor;
             previewCamera.targetTexture = previewTex;
-            previewCamera.fieldOfView = flatVerticalFov;
+            previewCamera.fieldOfView = EnableSyncFovFromPlayer ? PlayerFov : flatVerticalFov;
             SyncCameraTransform();
 
             clearTex = new Texture2D(1, 1);
@@ -665,32 +667,40 @@ namespace Eosin
             myNeedSetup = true;
         }
 
+        private Transform CreateUIElement(Transform prefab, bool? rightSide)
+        {
+            return base.CreateUIElement(prefab, rightSide ?? false);
+        }
+
         void BuildUI()
         {
-            Utils.OnInitUI(CreateUIElement);
+            Utils.OnInitUI(CreateUIElement, this);
 
-            previewChooser = Utils.SetupToggle(this, "Preview", true, true);
-            previewStaysOpenChooser = Utils.SetupToggle(this, "Preview Stays Open", true, true);
-            previewAudioFromCamPos = Utils.SetupToggle(this, "Preview Audio From Cam Pos", true, true);
-            unfreezeOnPlaybackChooser = Utils.SetupToggle(this, "Start Playback Unfreezes Motion", true, true);
-            crosshairChooser = Utils.SetupToggle(this, "Crosshair", false, true);
-            muteAudioChooser = Utils.SetupToggle(this, "Mute All Sound", true, true);
-            VRAMWarningChooser = Utils.SetupToggle(this, "Ignore VRAM Warning", false, true);
-            preserveTransparencyChooser = Utils.SetupToggle(this, "Preserve Transparency (PNG Only)", false, true);
-            leaveEmptySphereVisible = Utils.SetupToggle(this, "Empty and Target Stay Visible", true, true);
-            usePostProcessing = Utils.SetupToggle(this, "Use Post-Processing Effects", false, true);
-            useCommandBuffers = Utils.SetupToggle(this, "Use Command Buffer Effects", false, true);
+            BuildExtUI();
 
-            JSONStorableFloat previewSizeChooser = Utils.SetupSliderFloat(this, "Preview Size (%)", previewSize * 100f, 1f, ((float)(Screen.height * (1 - previewPadding * 3f)) / (float)Screen.width) * 100f, true);
+            previewChooser = SetupToggle("Preview", true, true);
+            previewStaysOpenChooser = SetupToggle("Preview Stays Open", true, true);
+            previewAudioFromCamPos = SetupToggle("Preview Audio From Cam Pos", true, true);
+            unfreezeOnPlaybackChooser = SetupToggle("Start Playback Unfreezes Motion", true, true);
+            crosshairChooser = SetupToggle("Crosshair", false, true);
+            muteAudioChooser = SetupToggle("Mute All Sound", true, true);
+            VRAMWarningChooser = SetupToggle("Ignore VRAM Warning", false, true);
+            preserveTransparencyChooser = SetupToggle("Preserve Transparency (PNG Only)", false, true);
+            leaveEmptySphereVisible = SetupToggle("Empty and Target Stay Visible", true, true);
+            usePostProcessing = SetupToggle("Use Post-Processing Effects", false, true);
+            useCommandBuffers = SetupToggle("Use Command Buffer Effects", false, true);
+
+            JSONStorableFloat previewSizeChooser = SetupSliderFloat("Preview Size (%)", previewSize * 100f, 1f, ((float)(Screen.height * (1 - previewPadding * 3f)) / (float)Screen.width) * 100f, true);
 
             Utils.SetupAction(this, "PlayPause", PlayPause);
-            Utils.SetupButton(this, "Play / Pause Video", PlayPause, true);
+            SetupButton("Play / Pause Video", PlayPause, true);
             Utils.SetupAction(this, "PlayVideoAndAnimation", PlayVideoAndAnimation);
-            Utils.SetupButton(this, "Play / Pause Video With Animation", PlayVideoAndAnimation, true);
+            SetupButton("Play / Pause Video With Animation", PlayVideoAndAnimation, true);
 
             timeChooser = new JSONStorableFloat("Video Time", 0, 0, 10000, true, true);
             timeChooser.storeType = JSONStorableParam.StoreType.Full;
             timeSlider = CreateSlider(timeChooser, true);
+            timeSlider.label = Lang.Get(timeChooser.name);
             RegisterFloat(timeChooser);
             myMemoryInfo = new JSONStorableString("MemoryInfo", "");
             myDiskSpaceInfo = new JSONStorableString("DiskSpaceInfo", "");
@@ -699,14 +709,16 @@ namespace Eosin
             Utils.SetupInfoOneLine(this, myDiskSpaceInfo, true);
             Utils.SetupInfoOneLine(this, effectiveFrameRate, true);
 
-            JSONStorableString filenameString = new JSONStorableString("baseFilename", "");
-            UIDynamicLabelInput fileNameInput = Utils.SetupTextInput(this, "Filename", filenameString, true);
+            //JSONStorableString filenameString = new JSONStorableString("baseFilename", "");
+            //UIDynamicLabelInput fileNameInput = Utils.SetupTextInput(this, Lang.Get("Filename"), filenameString, true);
 
-            JSONStorableStringChooser aspectRatioChooser = Utils.SetupStringChooser(this, "Aspect Ratio", ASPECTRATIO_NAMES, DEFAULT_ASPECTRATIO_IDX, true);
-            JSONStorableStringChooser resolutionChooserOutput = Utils.SetupStringChooser(this, "Output Resolution", RESOLUTION_NAMES[DEFAULT_ASPECTRATIO_IDX], DEFAULT_RESOLUTION_IDX[DEFAULT_ASPECTRATIO_IDX], true);
-            JSONStorableStringChooser formatChooser = Utils.SetupStringChooser(this, "Image Format", FORMAT_NAMES, DEFAULT_FORMAT, true);
-            JSONStorableFloat jpegQualityChooser = Utils.SetupSliderInt(this, "JPEG Quality (%)", jpegQuality, 0, 100, true);
-            audioSampleRangeChooser = Utils.SetupSliderInt(this, "Audio Sample Range (Prevent Popping)", (int)maxShort, 1, (int)maxShort, true);
+            JSONStorableStringChooser aspectRatioChooser = SetupStringChooser("Aspect Ratio", ASPECTRATIO_NAMES, DEFAULT_ASPECTRATIO_IDX, true);
+            JSONStorableStringChooser resolutionChooserOutput = SetupStringChooser("Output Resolution", RESOLUTION_NAMES[DEFAULT_ASPECTRATIO_IDX], DEFAULT_RESOLUTION_IDX[DEFAULT_ASPECTRATIO_IDX], true);
+            portaitMode = SetupToggle("Portait Mode (Flip AspectRatio)", false, true);
+
+            JSONStorableStringChooser formatChooser = SetupStringChooser("Image Format", FORMAT_NAMES, DEFAULT_FORMAT, true);
+            JSONStorableFloat jpegQualityChooser = SetupSliderInt("JPEG Quality (%)", jpegQuality, 0, 100, true);
+            audioSampleRangeChooser = SetupSliderInt("Audio Sample Range (Prevent Popping)", (int)maxShort, 1, (int)maxShort, true);
 
             TextureSettings textureSettings = new TextureSettings();
             // force compression to resize texture dimensions into divisible by 4, otherwise junk data
@@ -718,30 +730,30 @@ namespace Eosin
             textureSettings.filterMode = FilterMode.Bilinear;
 
             Utils.SetupAction(this, "ClearBackground", ClearBackground);
-            Utils.SetupButton(this, "Clear Background", ClearBackground, true);
+            SetupButton("Clear Background", ClearBackground, true);
 
-            previewBackgroundChooser = Utils.SetupTexture2DChooser(this, "Load Background Image", "", true, textureSettings, PreviewBackgroundLoaded, false);
+            previewBackgroundChooser = SetupTexture2DChooser("Load Background Image", "", true, textureSettings, PreviewBackgroundLoaded, false);
             videoURL = new JSONStorableUrl("Video", string.Empty, (string url) => { LoadURLVideo(url); }, "mp4|asf|avi|dv|m4v|mov|mpg|mpeg|ogv|vp8|webm|wmv");
             RegisterUrl(videoURL);
             UIDynamicButton button = CreateButton("Load Background Video (No Autoplay)", true);
+            button.label = Lang.Get(button.label);
             videoURL.RegisterFileBrowseButton(button.button);
-            JSONStorableStringChooser backgroundStereoLayoutChooser = Utils.SetupStringChooser(this, "BG Stereo Layout", STEREO_LAYOUTS, 0, true);
-            loopChooser = Utils.SetupToggle(this, "Loop Video", true, true);
+            JSONStorableStringChooser backgroundStereoLayoutChooser = SetupStringChooser("BG Stereo Layout", STEREO_LAYOUTS, 0, true);
+            loopChooser = SetupToggle("Loop Video", true, true);
 
-            unpauseVideoOnRenderChooser = Utils.SetupToggle(this, "Unpause Video On Render", true, true);
+            unpauseVideoOnRenderChooser = SetupToggle("Unpause Video On Render", true, true);
 
-            renderBackgroundChooser = Utils.SetupToggle(this, "Render Background To Output", true, true);
-            backgroundColor = Utils.SetupColor(this, "Background Color", Color.black, true);
-            hideBackgroundColorOnPreviewOnly = Utils.SetupToggle(this, "Hide Background Color On Preview Only", false, true);
-            
-            encThreadsToggle = Utils.SetupToggle(this, "Multi-Threaded Encoding", true, true);
-            numEncThreadsSlider = Utils.SetupSliderIntWithRange(this, "Encoder Thread Count", 4, 1, MAX_ENC_THREADS, true);
-            
+            renderBackgroundChooser = SetupToggle("Render Background To Output", true, true);
+            backgroundColor = SetupColor("Background Color", Color.black, true);
+            hideBackgroundColorOnPreviewOnly = SetupToggle("Hide Background Color On Preview Only", false, true);
+
+            CreateTitleUI("Stream Push Settings", true);
+
             streamHostField = new JSONStorableString("streamHostField", "127.0.0.1");
-            
-            streamModeChooser = Utils.SetupStringChooser(this, "Stream Mode", STREAM_NAMES, STREAM_DISABLED, true);
+            streamModeChooser = SetupStringChooser("Stream Mode", STREAM_NAMES, STREAM_DISABLED, true);
             UIDynamicLabelInput streamHostInput = Utils.SetupTextInput(this, "Host", streamHostField, true);
-            streamPortSlider = Utils.SetupSliderIntWithRange(this, "Port", 54341, IPEndPoint.MinPort, IPEndPoint.MaxPort, true);
+            streamHostInput.label.text = Lang.Get("Host");
+            streamPortSlider = SetupSliderIntWithRange("Port", 54341, IPEndPoint.MinPort, IPEndPoint.MaxPort, true);
 
             Utils.SetupAction(this, "TakeSingleScreenshot", TakeSingleScreenshot);
             Utils.SetupAction(this, "StartPlaybackAndRecordVideo", StartPlaybackAndRecordVideo);
@@ -749,25 +761,28 @@ namespace Eosin
             Utils.SetupAction(this, "SeekToBeginning", SeekToBeginning);
             Utils.SetupAction(this, "StopRecording", EndRender);
 
-            Utils.SetupButton(this, "Take Single Screenshot (F9)", TakeSingleScreenshot, false);
-            Utils.SetupButton(this, "Start Playback and Record Video (F10)", StartPlaybackAndRecordVideo, false);
-            Utils.SetupButton(this, "Record Video (F11) (Escape To Cancel)", RecordVideo, false);
-            Utils.SetupButton(this, "Seek To Beginning (F12)", SeekToBeginning, false);
-            recordAudioChooser = Utils.SetupToggle(this, "Record Audio", true, false);
-            pauseVideoChooser = Utils.SetupToggle(this, "Resume Last Recording", false, false);
-            dazBvhScaleChooser = Utils.SetupToggle(this, "DAZ BVH Scale (cm units)", false, false);
-            bvhStartsAtOrigin = Utils.SetupToggle(this, "BVH Starts At Origin", false, false);
-            bvhUseUnorientedSkeleton = Utils.SetupToggle(this, "BVH Unoriented Rest Pose", false, false);
+            SetupButton("Take Single Screenshot (F9)", TakeSingleScreenshot, false);
+            SetupButton("Start Playback and Record Video (F10)", StartPlaybackAndRecordVideo, false);
+            SetupButton("Record Video (F11) (Escape To Cancel)", RecordVideo, false);
+            SetupButton("Seek To Beginning (F12)", SeekToBeginning, false);
+            recordAudioChooser = SetupToggle("Record Audio", false, false);
+            pauseVideoChooser = SetupToggle("Resume Last Recording", false, false);
+            dazBvhScaleChooser = SetupToggle("DAZ BVH Scale (cm units)", false, false);
+            bvhStartsAtOrigin = SetupToggle("BVH Starts At Origin", false, false);
+            bvhUseUnorientedSkeleton = SetupToggle("BVH Unoriented Rest Pose", false, false);
 
-            JSONStorableStringChooser renderModeChooser = Utils.SetupStringChooser(this, "Render Mode", RENDERMODE_NAMES, DEFAULT_RENDERMODE_IDX, false);
-            JSONStorableStringChooser stereoModeChooser = Utils.SetupStringChooser(this, "Stereo Mode", STEREOMODE_NAMES, STEREO_STATIC, false);
-            JSONStorableFloat ipdChooser = Utils.SetupSliderFloatWithRange(this, "Interpupillary Distance (mm)", DEFAULT_IPD, 40, 90, false);
-            JSONStorableFloat cubemapSideLengthChooser = Utils.SetupSliderInt(this, "Cubemap/Panoramic Side Resolution", cubemapSideLength, 128, 8192, false);
-            JSONStorableStringChooser msaaChooser = Utils.SetupStringChooser(this, "VR & Flat MSAA", MSAA_NAMES, DEFAULT_MSAA_IDX, false);
-            JSONStorableFloat secondsToRecordChooser = Utils.SetupSliderIntWithRange(this, "Seconds To Record", secondsToRecord, 1, 60, false);
-            JSONStorableStringChooser frameRateChooser = Utils.SetupStringChooser(this, "Frame Rate", FRAMERATE_NAMES, DEFAULT_FRAMERATE_IDX, false);
-            JSONStorableFloat framesToSkipChooser = Utils.SetupSliderIntWithRange(this, "Render Every nth Frame", 1, 1, 10, false);
-            JSONStorableFloat lilyRenderOverlapChooser = Utils.SetupSliderFloat(this, "Smooth Stitching Overlap (%)", lilyRenderOverlap, 0f, 100f, false);
+            JSONStorableStringChooser renderModeChooser = SetupStringChooser("Render Mode", RENDERMODE_NAMES, DEFAULT_RENDERMODE_IDX, false);
+            var vrPositionModeChooser = SetupStringChooser("VR Camera Position Mode", VRPositionModes.Names, VRPositionModes.NoSet, false);
+            JSONStorableStringChooser stereoModeChooser = SetupStringChooser("Stereo Mode", STEREOMODE_NAMES, STEREO_STATIC, false);
+            JSONStorableFloat ipdChooser = SetupSliderFloatWithRange("Interpupillary Distance (mm)", DEFAULT_IPD, 40, 90, false);
+            JSONStorableFloat cubemapSideLengthChooser = SetupSliderInt("Cubemap/Panoramic Side Resolution", cubemapSideLength, 128, 8192, false);
+            JSONStorableStringChooser msaaChooser = SetupStringChooser("VR & Flat MSAA", MSAA_NAMES, DEFAULT_MSAA_IDX, false);
+            _secondsToRecordChooser = SetupSliderIntWithRange("Seconds To Record", secondsToRecord, 1, 60, false);
+            _secondsToRecordChooser.constrained = false;
+
+            JSONStorableStringChooser frameRateChooser = SetupStringChooser("Frame Rate", FRAMERATE_NAMES, DEFAULT_FRAMERATE_IDX, false);
+            JSONStorableFloat framesToSkipChooser = SetupSliderIntWithRange("Render Every nth Frame", 1, 1, 10, false);
+            JSONStorableFloat lilyRenderOverlapChooser = SetupSliderFloat("Smooth Stitching Overlap (%)", lilyRenderOverlap, 0f, 100f, false);
 
             List<string> sceneAtoms = new List<string>() { "None" };
             foreach (string id in SuperController.singleton.GetAtomUIDs())
@@ -779,19 +794,24 @@ namespace Eosin
             JSONStorableStringChooser focusObject = new JSONStorableStringChooser("Camera Target", sceneAtoms, "None", "Cam Target (Reload for New)");
             RegisterStringChooser(focusObject);
             UIDynamicPopup popup = CreateFilterablePopup(focusObject, false);
-            JSONStorableFloat flatHorizontalFovChooser = Utils.SetupSliderFloat(this, "Flat Horizontal FOV", flatHorizontalFov, 0.1f, 179.9f, false);
-            JSONStorableFloat flatSupersamplingChooser = Utils.SetupSliderInt(this, "Flat Supersampling Multiplier", flatSupersampling, 1, 8, false);
-            JSONStorableStringChooser kernelModeChooser = Utils.SetupStringChooser(this, "Flat Kernel Mode", KERNEL_NAMES, myKernelMode, false);
+            popup.label = Lang.Get(focusObject.name);
+            JSONStorableFloat flatHorizontalFovChooser = SetupSliderFloat("Flat Horizontal FOV", flatHorizontalFov, 0.1f, 179.9f, false);
+            JSONStorableFloat flatSupersamplingChooser = SetupSliderInt("Flat Supersampling Multiplier", flatSupersampling, 1, 8, false);
+            JSONStorableStringChooser kernelModeChooser = SetupStringChooser("Flat Kernel Mode", KERNEL_NAMES, myKernelMode, false);
 
-            hideSizeChooser = Utils.SetupSliderFloat(this, "Hide Vertical Extremes Size (Degrees)", 18, 0, 100, false);
-            eyePivotDistanceChooser = Utils.SetupSliderFloatWithRange(this, "Eye Pivot Distance (mm) (Stereo)", 0, 0, 200, false);
-            frontFovChooser = Utils.SetupSliderFloat(this, "Front FOV (Triangle Stereo)", 120, 90, 170, false);
-            hideSeamsSizeChooser = Utils.SetupSliderFloatWithRange(this, "Hide Seams Size (Triangle/Square)", 0, 0, 50, false);
-            hideSeamsParallaxChooser = Utils.SetupSliderFloatWithRange(this, "Hide Seams Parallax (Triangle/Square)", 0, 0, 10, false);
+            hideSizeChooser = SetupSliderFloat("Hide Vertical Extremes Size (Degrees)", 18, 0, 100, false);
+            eyePivotDistanceChooser = SetupSliderFloatWithRange("Eye Pivot Distance (mm) (Stereo)", 0, 0, 200, false);
+            frontFovChooser = SetupSliderFloat("Front FOV (Triangle Stereo)", 120, 90, 170, false);
+            hideSeamsSizeChooser = SetupSliderFloatWithRange("Hide Seams Size (Triangle/Square)", 0, 0, 50, false);
+            hideSeamsParallaxChooser = SetupSliderFloatWithRange("Hide Seams Parallax (Triangle/Square)", 0, 0, 10, false);
             Utils.SetupAction(this, "ClearSeamTexture", ClearSeamTexture);
-            Utils.SetupButton(this, "Clear Seam Texture", ClearSeamTexture, false);
-            seamTextureUrl = Utils.SetupTexture2DChooser(this, "Load Seam Texture", "", false, textureSettings, SeamTextureLoaded, false);
-            seamTextureTintChooser = Utils.SetupColor(this, "Seam Tint", Color.black, false);
+            SetupButton("Clear Seam Texture", ClearSeamTexture, false);
+            seamTextureUrl = SetupTexture2DChooser("Load Seam Texture", "", false, textureSettings, SeamTextureLoaded, false);
+            seamTextureTintChooser = SetupColor("Seam Tint", Color.black, false);
+
+            Utils.SetupSpacer(this, 10f, true);
+
+            var pluginInfoText = Utils.SetupInfoText(this, Lang.Get("This plugin is an improvement based on the VRRenderer plugin created by Eosin. It is licensed under CC BY-SA. The original plugin can be found at https://hub.virtamate.com/resources/11994/. \n\nBuilding upon VRRenderer, this plugin adds support for vertical screen rendering. It also incorporates rendering process control for mmd2timeline Player (MMDShow) and offers support for breakpoint recording and setting initial camera positions for VR recording.\n\nThe VRRenderer plugin utilizes code from MacGruber's Essentials (licensed under CC BY-SA) and Élie Michel's LilyRender360 (licensed under MIT). \n\nSee https://github.com/jamexuxu/Eosin_VRRenderer for further information."), 650f, false);
 
             previewAudioFromCamPos.setCallbackFunction += (bool b) =>
             {
@@ -1014,10 +1034,10 @@ namespace Eosin
                 myNeedSetup = true;
             };
 
-            filenameString.setCallbackFunction += (string s) =>
-            {
-                baseFilename = s;
-            };
+            //filenameString.setCallbackFunction += (string s) =>
+            //{
+            //    baseFilename = s;
+            //};
 
             cubemapSideLengthChooser.setCallbackFunction += (float v) =>
             {
@@ -1043,7 +1063,7 @@ namespace Eosin
 
                 myNeedSetup = true;
             };
-            secondsToRecordChooser.setCallbackFunction += (float v) =>
+            _secondsToRecordChooser.setCallbackFunction += (float v) =>
             {
                 secondsToRecord = (int)v;
                 myNeedSetup = true;
@@ -1061,24 +1081,48 @@ namespace Eosin
                 if (renderModeIdx < 0)
                     renderModeIdx = DEFAULT_RENDERMODE_IDX;
 
-                bBvhRender = renderModeIdx == 5;
-                bStereoRender = renderModeIdx == 1 || renderModeIdx == 2;
-                b180Degrees = renderModeIdx == 1 || renderModeIdx == 3;
-                bFlatRender = renderModeIdx == 0 || renderModeIdx == 5;
-
                 oldOverlap = -1f;
+
+                //UpdateRenderMode();
+
+                if (renderModeIdx == 0)
+                {
+                    // 设置分辨率为2:1
+                    aspectRatioChooser.val = "16:9";
+                    // 停用FOV同步
+                    _syncFovJSON.val = true;
+                }
+                else
+                // 立体时
+                if (renderModeIdx != 5)
+                {
+                    // 设置分辨率为2:1
+                    aspectRatioChooser.val = "2:1";
+                    // 停用FOV同步
+                    _syncFovJSON.val = false;
+
+                    SetVRRenderPosition(vrPositionModeChooser.val);
+                }
+
+
                 myNeedSetup = true;
+            };
+
+            vrPositionModeChooser.setCallbackFunction = (v) =>
+            {
+                SetVRRenderPosition(v);
             };
 
             aspectRatioChooser.setCallbackFunction += (string v) =>
             {
-                int aspectRatioIdx = ASPECTRATIO_NAMES.FindIndex((string entry) => { return entry == v; });
+                int aspectRatioIdx = ASPECTRATIO_NAMES.IndexOf(v);
                 if (aspectRatioIdx < 0)
                     aspectRatioIdx = DEFAULT_ASPECTRATIO_IDX;
                 if (aspectRatioIdx != myAspectRatioIdx)
                 {
                     myAspectRatioIdx = aspectRatioIdx;
                     resolutionChooserOutput.choices = RESOLUTION_NAMES[myAspectRatioIdx];
+                    resolutionChooserOutput.displayChoices = resolutionChooserOutput.choices;
                     resolutionChooserOutput.valNoCallback = RESOLUTION_NAMES[myAspectRatioIdx][DEFAULT_RESOLUTION_IDX[myAspectRatioIdx]];
                     resolutionChooserOutput.setCallbackFunction(resolutionChooserOutput.val);
                 }
@@ -1089,6 +1133,11 @@ namespace Eosin
                 myResolutionIdx = resolutionChooserOutput.choices.FindIndex((string entry) => { return entry == v; });
                 if (myResolutionIdx < 0)
                     myResolutionIdx = DEFAULT_RESOLUTION_IDX[myAspectRatioIdx];
+                myNeedSetup = true;
+            };
+
+            portaitMode.setCallbackFunction += (bool v) =>
+            {
                 myNeedSetup = true;
             };
 
@@ -1108,6 +1157,23 @@ namespace Eosin
                     myFileFormat = DEFAULT_FORMAT;
                 myNeedSetup = true;
             };
+        }
+
+        private void SetVRRenderPosition(string v)
+        {
+            var vrPositionIndex = VRPositionModes.GetValue(v);
+
+            switch (vrPositionIndex)
+            {
+                case VRPositionModes.Sit:
+                    containingAtom.mainController.transform.SetPositionAndRotation(new Vector3(0, 1.2f, 1.5f), Quaternion.Euler(0, 180f, 0));
+                    break;
+                case VRPositionModes.Stand:
+                    containingAtom.mainController.transform.SetPositionAndRotation(new Vector3(0, 1.6f, 1.5f), Quaternion.Euler(0, 180f, 0));
+                    break;
+                default:
+                    break;
+            }
         }
 
         void SyncSelectionVisibility()
@@ -1303,7 +1369,7 @@ namespace Eosin
                 if (go != null)
                     Destroy(go);
 
-                Utils.OnDestroyUI();
+                Utils.OnDestroyUI(this);
 
                 if (myLilyRenderBundleURL != null)
                 {
@@ -1442,10 +1508,22 @@ namespace Eosin
             }
         }
 
+        private void UpdateRenderMode()
+        {
+            bBvhRender = renderModeIdx == 5;
+            bStereoRender = renderModeIdx == 1 || renderModeIdx == 2;
+            b180Degrees = renderModeIdx == 1 || renderModeIdx == 3;
+            bFlatRender = renderModeIdx == 0 || renderModeIdx == 5;
+        }
+
         private void Setup()
         {
             cubemapSideLength = (int)(selectedCubemapSideLength * (1f + lilyRenderOverlap * 2));
-            finalResolution = RESOLUTION_VALUES[myAspectRatioIdx][myResolutionIdx];
+            var resolution = RESOLUTION_VALUES[myAspectRatioIdx][myResolutionIdx];
+
+            UpdateRenderMode();
+
+            finalResolution = portaitMode.val ? new Vector2Int(resolution.y, resolution.x) : resolution;
 
             float aspect = (float)finalResolution.x / (float)finalResolution.y;
             flatVerticalFov = Mathf.Rad2Deg * 2f * Mathf.Atan(Mathf.Tan(Mathf.Deg2Rad * flatHorizontalFov * 0.5f) / aspect);
@@ -1471,7 +1549,7 @@ namespace Eosin
             }
 
             previewCamera.targetTexture = previewTex;
-            previewCamera.fieldOfView = bFlatRender ? flatVerticalFov : flatHorizontalFov;
+            previewCamera.fieldOfView = EnableSyncFovFromPlayer ? PlayerFov : (bFlatRender ? flatVerticalFov : flatHorizontalFov);
 
             // changed cubemap res or preview size or msaa or resolution
             if (!bFlatRender && previewChooser.val && _equirectMat != null && (oldPreviewSize != previewSize || oldSelectedCubemapSideLength != selectedCubemapSideLength || oldMsaaLevel != myMsaaLevel || oldRenderMode != renderModeIdx || oldResolution != myResolutionIdx || oldOverlap != lilyRenderOverlap))
@@ -1504,13 +1582,13 @@ namespace Eosin
             else
                 effectiveFrameRateInt = frameRateInt;
 
-            effectiveFrameRate.val = "<b>Effective Frame Rate: " + effectiveFrameRateInt + " FPS</b>";
+            effectiveFrameRate.val = "<b>" + Lang.Get("Effective Frame Rate") + ": " + effectiveFrameRateInt + " FPS</b>";
 
             float diskSpaceEstimate = GetDiskSpaceEstimate();
             if (myDiskSpaceEstimate != diskSpaceEstimate)
             {
                 myDiskSpaceEstimate = diskSpaceEstimate;
-                myDiskSpaceInfo.val = "<b>Video Frames Size: ~" + myDiskSpaceEstimate.ToString("0.0") + " GB</b>";
+                myDiskSpaceInfo.val = "<b>" + Lang.Get("Video Frames Size") + ": ~" + myDiskSpaceEstimate.ToString("0.0") + " GB</b>";
             }
 
             float memoryEstimate = GetMemoryEstimate();
@@ -1523,7 +1601,7 @@ namespace Eosin
                 else if (myMemoryEstimate * 1024 > SystemInfo.graphicsMemorySize - 4096)
                     color = "FF8800";
                 myMemoryInfo.val = color != "" ? "<color=#" + color + ">" : "";
-                myMemoryInfo.val += "<b>Estimated VRAM Usage: ~" + myMemoryEstimate.ToString("0.0") + " GB</b>";
+                myMemoryInfo.val += "<b>" + Lang.Get("Estimated VRAM Usage") + ": ~" + myMemoryEstimate.ToString("0.0") + " GB</b>";
                 myMemoryInfo.val += color != "" ? "</color>" : "";
             }
 
@@ -1612,6 +1690,7 @@ namespace Eosin
                 if (bRendering)
                 {
                     if (bFlatRender)
+                        //Graphics.DrawTexture(previewRect, finalOutputTexture);
                         Graphics.DrawTexture(previewRect, finalOutputTextures[0]);
                     else
                         Graphics.DrawTexture(previewRect, equirectL);
@@ -1770,6 +1849,14 @@ namespace Eosin
                 handledPre = false;
                 handledPost = false;
 
+                if (EnablePlayerRender && waitingToReady)
+                {
+                    if (ReadyToRendering)
+                    {
+                        StartPlayerRender();
+                    }
+                    return;
+                }
 
                 if (delayedInitCounter > 0)
                 {
@@ -1783,13 +1870,13 @@ namespace Eosin
                 {
                     if (sphereObject != null)
                     {
-                        sphereObject.active = true;
+                        sphereObject.SetActive(true);
                         sphereObject.GetComponent<MeshRenderer>().enabled = true;
                     }
 
                     if (targetSphereObject != null)
                     {
-                        targetSphereObject.gameObject.active = true;
+                        targetSphereObject.gameObject.SetActive(true);
                         targetSphereObject.GetComponent<MeshRenderer>().enabled = true;
                     }
                 }
@@ -1922,10 +2009,10 @@ namespace Eosin
         void RenderTexToTex2D(RenderTexture renderTex, Texture2D tex2D)
         {
             RenderTexture previousRT = RenderTexture.active;
-            Rect sourceRect = new Rect(0, 0, renderTex.width, renderTex.width);
+            Rect sourceRect = new Rect(0, 0, renderTex.width, bFlatRender ? renderTex.height : renderTex.width);
             RenderTexture.active = renderTex;
             tex2D.ReadPixels(sourceRect, 0, 0, false);
-            tex2D.Apply();
+            tex2D.Apply(false);
             RenderTexture.active = previousRT;
         }
 
@@ -2104,7 +2191,7 @@ namespace Eosin
             }
             totalPcmAudioData.AddRange(pcmAudioData);
             pcmAudioData = null;
-            WriteWavFile(baseFilename, totalPcmAudioData.ToArray());
+            WriteWavFile(totalPcmAudioData.ToArray());
         }
 
         void RecordFrameAudio()
@@ -2131,12 +2218,11 @@ namespace Eosin
             {
                 pcmAudioData.Add((short)(Mathf.Clamp(Mathf.Round((float)currentBuffer[i] * maxShort), -sampleRange, sampleRange - 1)));
             }
-            
             if (audioBufferGeneric.IsCreated)
                 audioBufferGeneric.Dispose();
         }
 
-        void WriteWavFile(string filename, short[] pcmSamples)
+        void WriteWavFile(short[] pcmSamples)
         {
             if (pcmSamples.Length == 0)
             {
@@ -2168,7 +2254,7 @@ namespace Eosin
             header.AddRange(BitConverter.GetBytes((uint)audioDataLength));
             Array.Copy(header.ToArray(), bytes, header.Count);
             Buffer.BlockCopy(pcmSamples, 0, bytes, header.Count, bytesPerSample * pcmSamples.Length);
-            FileManagerSecure.WriteAllBytes(myDirectory + filename + "_" + (frameCounter - 1).ToString("D6") + ".wav", bytes);
+            FileManagerSecure.WriteAllBytes(SaveDirectory + "audio.wav", bytes);
         }
 
         void OnPreRenderCallback(Camera cam)
@@ -2264,7 +2350,7 @@ namespace Eosin
             bool bPreserveAlphaInRender = preserveTransparencyChooser.val || (renderBackgroundChooser.val && (previewBackground != null || videoPlayer != null));
             bool bPreserveAlphaNow = bPreserveAlphaInRender || (hideBackgroundColorOnPreviewOnly.val);
 
-            previewCamera.fieldOfView = flatVerticalFov;
+            previewCamera.fieldOfView = EnableSyncFovFromPlayer ? PlayerFov : flatVerticalFov;
 
             if (bPreserveAlphaNow)
             {
@@ -2288,7 +2374,7 @@ namespace Eosin
         {
             if (!PrepareFrame())
                 return;
-            
+
             int curEncThreadIndex = -1;
 
             if (encThreadingEnabled)
@@ -2296,7 +2382,7 @@ namespace Eosin
                 while (!encThreadSem.WaitOne(100))
                 {
                 }
-
+                //RenderFrame();
                 for (int i = 0; i < encThreadFreeFlags.Length; i++)
                 {
                     if (encThreadFreeFlags[i])
@@ -2311,11 +2397,11 @@ namespace Eosin
             {
                 curEncThreadIndex = 0;
             }
-            
+
             if (curEncThreadIndex >= 0)
             {
                 RenderFrame(curEncThreadIndex);
-
+                //ProcessFrame();
                 ProcessFrame(curEncThreadIndex);
             }
         }
@@ -2327,16 +2413,19 @@ namespace Eosin
                 if (flatSupersampling > 1)
                 {
                     FlatDownsample();
+                    //RenderTexToTex2D(outputRenderTexture, finalOutputTexture);
                     RenderTexToTex2D(outputRenderTexture, finalOutputTextures[threadIdx]);
                 }
                 else
                 {
+                    //RenderTexToTex2D(flatRenderTex, finalOutputTexture);
                     RenderTexToTex2D(flatRenderTex, finalOutputTextures[threadIdx]);
                 }
             }
             if (bRecordVideo)
             {
-                SaveRenderAsFile(myFileFormat, baseFilename + "_" + frameCounter.ToString("D6"), finalOutputTextures[threadIdx], threadIdx);
+                //SaveRenderAsFile(myFileFormat, frameCounter.ToString("D6"), finalOutputTexture);
+                SaveRenderAsFile(myFileFormat, frameCounter.ToString("D6"), finalOutputTextures[threadIdx], threadIdx);
 
                 timestamps.Add(Time.realtimeSinceStartup);
 
@@ -2350,7 +2439,8 @@ namespace Eosin
             }
             else
             {
-                SaveRenderAsFile(myFileFormat, baseFilename, finalOutputTextures[threadIdx], threadIdx);
+                //SaveRenderAsFile(myFileFormat, GetFilename(), finalOutputTexture);
+                SaveRenderAsFile(myFileFormat, GetFilename(), finalOutputTextures[threadIdx], threadIdx);
                 EndRender();
                 return;
             }
@@ -2497,10 +2587,12 @@ namespace Eosin
                 }
                 else if (stereoMode == STEREO_PANORAMIC)
                 {
+                    //RenderPanoramicStereoMap(renderCam, finalOutputTexture, Vector3.left * ipd / 2000f, b180Degrees ? 180f : 360f);
                     RenderPanoramicStereoMap(renderCam, finalOutputTextures[threadIdx], Vector3.left * ipd / 2000f, b180Degrees ? 180f : 360f);
                 }
 
                 if (stereoMode != STEREO_PANORAMIC)
+                    //MergeSidesToTexture(equirectL, equirectR, finalOutputTexture, b180Degrees);
                     MergeSidesToTexture(equirectL, equirectR, finalOutputTextures[threadIdx], b180Degrees);
             }
             else
@@ -2524,6 +2616,7 @@ namespace Eosin
                 {
                     RenderCubemap(renderCam, renderFaces, Vector3.zero);
                     CubemapToEquirectShader(renderFaces, equirectL, background);
+                    //RenderTexToTex2D(equirectL, finalOutputTexture);
                     RenderTexToTex2D(equirectL, finalOutputTextures[threadIdx]);
                 }
             }
@@ -2533,7 +2626,7 @@ namespace Eosin
         void RenderFlatCamera(Camera cam, RenderTexture texture, float verticalFov)
         {
             cam.targetTexture = texture;
-            cam.fieldOfView = verticalFov;
+            cam.fieldOfView = EnableSyncFovFromPlayer ? PlayerFov : verticalFov;
             cam.transform.localPosition = Vector3.zero;
             cam.transform.localRotation = Quaternion.identity;
             cam.Render();
@@ -2580,18 +2673,31 @@ namespace Eosin
             if (!CanTakeScreenshot())
                 return;
 
-            if (!pauseVideoChooser.val)
-                frameCounter = 0;
+            var startFrame = (int)_UICaptureFrame.val;
 
-            if (frameCounter == 0)
+            if (!pauseVideoChooser.val)
+                frameCounter = startFrame;
+
+            if (frameCounter == startFrame)
             {
                 pcmAudioData = null;
                 totalPcmAudioData = null;
-                lastFilename = "";
+                //lastFilename = "";
             }
 
             bRecordVideo = true;
-            BeginRender();
+
+            if (EnablePlayerRender)
+            {
+                StartCoroutine(ReadyToPlayerRender());
+            }
+            else
+            {
+                // 初始化保存目录
+                //InitSaveDirectory();
+
+                BeginRender();
+            }
         }
 
         private void StartPlaybackAndRecordVideo()
@@ -2691,7 +2797,7 @@ namespace Eosin
         {
             if (encThreadingEnabled)
             {
-                ThreadPool.QueueUserWorkItem(delegate(object arg)
+                ThreadPool.QueueUserWorkItem(delegate (object arg)
                 {
                     SaveRenderAsFileInternal(fileFormat, filename, tex);
 
@@ -2712,7 +2818,7 @@ namespace Eosin
                 // Stream raw texture data to TCP socket
                 byte[] rawBytes = tex.GetRawTextureData();
                 NetworkStream vidStream = streamVideoClient.GetStream();
-                
+
                 try
                 {
                     vidStream.Write(rawBytes, 0, rawBytes.Length);
@@ -2725,13 +2831,13 @@ namespace Eosin
                     streamVideoClient = null;
                 }
             }
-            
+
             if (saveVideoEnabled)
             {
                 // Regular file saving
                 filename += (fileFormat == FORMAT_JPG) ? ".jpg" : ".png";
                 byte[] bytes = (fileFormat == FORMAT_JPG) ? tex.EncodeToJPG(jpegQuality) : tex.EncodeToPNG();
-                FileManagerSecure.WriteAllBytes(myDirectory + filename, bytes);
+                FileManagerSecure.WriteAllBytes(SaveDirectory + filename, bytes);
             }
         }
 
@@ -3072,7 +3178,7 @@ namespace Eosin
                         bvhData[bones].bvhOutput.Append("Frames: ");
 
                         bvhData[bones].bvhOutputFrameOffset = bvhData[bones].bvhOutput.Length;
-						string reciprocal = (1f / effectiveFrameRateInt).ToString("F8");
+                        string reciprocal = (1f / effectiveFrameRateInt).ToString("F8");
                         bvhData[bones].bvhOutput.Append("\nFrame Time: " + reciprocal.Substring(0, reciprocal.Length - 1) + "\n"); // skip last rounded digit to ensure the reciprocal's reciprocal is above the original int
                     }
                 }
@@ -3093,7 +3199,7 @@ namespace Eosin
                     var data = pair.Value;
                     data.bvhOutput.Insert(data.bvhOutputFrameOffset, data.frames);
                     data.bvhOutput.Length -= 1; // truncate last newline
-                    FileManagerSecure.WriteAllText(myDirectory + baseFilename + "_" + root.containingAtom.name + ".bvh", data.bvhOutput.ToString());
+                    FileManagerSecure.WriteAllText(SaveDirectory + root.containingAtom.name + ".bvh", data.bvhOutput.ToString());
                 }
             }
             catch (Exception e)
@@ -3250,17 +3356,17 @@ namespace Eosin
 
             oldTimeScale = Time.timeScale;
 
-            if (baseFilename == "" || baseFilename == null)
-            {
-                baseFilename = GetFilename();
-                generatedFilename = true;
-            }
-            else
-                generatedFilename = false;
+            //if (baseFilename == "" || baseFilename == null)
+            //{
+            //    baseFilename = GetFilename();
+            //    generatedFilename = true;
+            //}
+            //else
+            //    generatedFilename = false;
 
-            myDirectory = SCREENSHOT_DIRECTORY;
+            //myDirectory = SCREENSHOT_DIRECTORY;
 
-            FileManagerSecure.CreateDirectory(myDirectory);
+            //FileManagerSecure.CreateDirectory(myDirectory);
 
             if (muteAudioChooser.val && !bActuallyRecordAudio)
             {
@@ -3322,10 +3428,10 @@ namespace Eosin
 
             myNeedSetup = true;
 
-            lastFilename = baseFilename;
+            //lastFilename = baseFilename;
 
-            if (generatedFilename)
-                baseFilename = "";
+            //if (generatedFilename)
+            //    baseFilename = "";
 
             SuperController.singleton.motionAnimationMaster.StopPlayback();
 
@@ -3387,8 +3493,9 @@ namespace Eosin
 
             int width = finalResolution.x;
             int height = finalResolution.y;
-            
+
             TextureFormat textureFormat = (myFileFormat == FORMAT_JPG || !(preserveTransparencyChooser.val && myFileFormat == FORMAT_PNG)) ? TextureFormat.RGB24 : TextureFormat.ARGB32;
+            //finalOutputTexture = new Texture2D(width, height, textureFormat, false);
 
             switch (STREAM_NAMES.FindIndex((s) => s == streamModeChooser.val))
             {
@@ -3409,8 +3516,8 @@ namespace Eosin
             if (streamVideoEnabled)
             {
                 string streamHost = streamHostField.val;
-                int streamPort = Mathf.Clamp((int) Math.Round(streamPortSlider.val), IPEndPoint.MinPort, IPEndPoint.MaxPort);
-                
+                int streamPort = Mathf.Clamp((int)Math.Round(streamPortSlider.val), IPEndPoint.MinPort, IPEndPoint.MaxPort);
+
                 SuperController.LogMessage("Sending raw image data (format: " + textureFormat + ", size: " + width + "x" + height + ", framerate: " + frameRateInt + ") to TCP socket " + streamHost + ":" + streamPort);
 
                 try
@@ -3428,12 +3535,12 @@ namespace Eosin
                 streamVideoClient = null;
             }
 
-            int numEncThreads = encThreadsToggle.val ? (int) numEncThreadsSlider.val : 0;
+            int numEncThreads = enableThreadsToggle.val ? (int)numThreadsSlider.val : 0;
 
             if (numEncThreads == 0)
             {
                 encThreadingEnabled = false;
-                finalOutputTextures = new Texture2D[] {new Texture2D(width, height, textureFormat, false)};
+                finalOutputTextures = new Texture2D[] { new Texture2D(width, height, textureFormat, false) };
                 encThreadFreeFlags = null;
                 encThreadSem = null;
             }
@@ -3444,7 +3551,6 @@ namespace Eosin
                     // Sending TCP data currently isn't threadsafe. Probably not much to be gained anyway.
                     numEncThreads = 1;
                 }
-                
                 encThreadingEnabled = true;
                 finalOutputTextures = new Texture2D[numEncThreads];
                 encThreadFreeFlags = new bool[numEncThreads];
@@ -3460,26 +3566,26 @@ namespace Eosin
             mySelectedController = SuperController.singleton.GetSelectedController();
             SuperController.singleton.ClearSelection();
 
-            if (!bRecordVideo || lastFilename == "" || lastFilename == null)
-            {
-                if (baseFilename == "" || baseFilename == null)
-                {
-                    baseFilename = GetFilename();
-                    generatedFilename = true;
-                }
-                else
-                    generatedFilename = false;
-            }
-            else
-            {
-                baseFilename = lastFilename;
-            }
+            //if (!bRecordVideo || lastFilename == "" || lastFilename == null)
+            //{
+            //    if (baseFilename == "" || baseFilename == null)
+            //    {
+            //        baseFilename = GetFilename();
+            //        generatedFilename = true;
+            //    }
+            //    else
+            //        generatedFilename = false;
+            //}
+            //else
+            //{
+            //    baseFilename = lastFilename;
+            //}
 
-            myDirectory = SCREENSHOT_DIRECTORY;
-            if (bRecordVideo)
-                myDirectory += baseFilename + "/";
+            //myDirectory = SCREENSHOT_DIRECTORY;
+            //if (bRecordVideo)
+            //    myDirectory += baseFilename + "/";
 
-            FileManagerSecure.CreateDirectory(myDirectory);
+            //FileManagerSecure.CreateDirectory(myDirectory);
 
             if (renderCamParentObj == null)
                 renderCamParentObj = new GameObject();
@@ -3597,6 +3703,8 @@ namespace Eosin
             if (!bRendering)
                 return;
 
+            EndPlayerRender();
+
             if (bBvhRender)
             {
                 EndBVHRender();
@@ -3642,6 +3750,7 @@ namespace Eosin
                 audioSources.Clear();
             }
 
+            //Destroy(finalOutputTexture);
             if (encThreadingEnabled)
             {
                 bool allThreadsDone;
@@ -3670,13 +3779,10 @@ namespace Eosin
             encThreadFreeFlags = null;
             encThreadSem = null;
 
-            if (streamVideoEnabled)
-            {
-                streamVideoClient.Close();
-                streamVideoClient = null;
-            }
-
             renderCamParentObj.SetActive(false);
+
+            // 置空保存目录
+            _saveDirectory = null;
 
             myNeedSetup = true;
 
@@ -3686,10 +3792,10 @@ namespace Eosin
             Destroy(renderCamParentObj);
             renderCamParentObj = null;
 
-            lastFilename = baseFilename;
+            //lastFilename = baseFilename;
 
-            if (generatedFilename)
-                baseFilename = "";
+            //if (generatedFilename)
+            //    baseFilename = "";
 
             if (mySelectedController != null)
                 SuperController.singleton.SelectController(mySelectedController);
@@ -3757,7 +3863,7 @@ namespace Eosin
             c.transform.localPosition = Vector3.zero;
             c.transform.localRotation = Quaternion.identity;
 
-            c.fieldOfView = 90f;
+            c.fieldOfView = EnableSyncFovFromPlayer ? PlayerFov : 90f;
             c.cullingMask = cullingMask;
             c.targetTexture = null;
             c.clearFlags = CameraClearFlags.SolidColor;
@@ -3813,7 +3919,7 @@ namespace Eosin
             int eyeHeight = b180Degrees ? outputTexture.height : outputTexture.height / 2;
 
             RenderTexture prev = RenderTexture.active;
-            cam.fieldOfView = verticalFov;
+            cam.fieldOfView = EnableSyncFovFromPlayer ? PlayerFov : verticalFov;
 
             RenderTexture bufferTex = GetRenderTexture(eyeWidth, eyeHeight, 1, false);
             RenderTexture textureBlack = GetRenderTexture(1, cubemapSideLength, myMsaaLevel, true);
@@ -3929,7 +4035,7 @@ namespace Eosin
                     cam.transform.localRotation = horizontalRotation;
                     cam.transform.localRotation = cam.transform.localRotation * Quaternion.AngleAxis(90 - 90f * ver, Vector3.right);
                     cam.transform.localPosition = sideVector;
-                    cam.fieldOfView = verticalFov;
+                    cam.fieldOfView = EnableSyncFovFromPlayer ? PlayerFov : verticalFov;
 
                     Vector3 pivot = Vector3.back * (eyePivotDistanceChooser.val / 1000f);
                     cam.transform.localPosition = horizontalRotation * (cam.transform.localPosition - pivot) + pivot;
@@ -3956,7 +4062,7 @@ namespace Eosin
                 for (int ver = 0; ver < 3; ver++)
                 {
                     cam.targetTexture = textures[hor * 3 + ver];
-                    cam.fieldOfView = verticalFov;
+                    cam.fieldOfView = EnableSyncFovFromPlayer ? PlayerFov : verticalFov;
                     Quaternion horizontalRotation = Quaternion.AngleAxis(hor * 90, Vector3.up);
                     cam.transform.localRotation = ver == 1 ? horizontalRotation : Quaternion.identity; // shader expects top and bottom renders to all face forward
                     cam.transform.localRotation = cam.transform.localRotation * Quaternion.AngleAxis(90 - 90f * ver, Vector3.right);
@@ -4001,7 +4107,7 @@ namespace Eosin
                 cam.transform.localPosition = sideVector;
                 cam.transform.localRotation = rotations[i];
                 cam.targetTexture = textures[i];
-                cam.fieldOfView = verticalFov;
+                cam.fieldOfView = EnableSyncFovFromPlayer ? PlayerFov : verticalFov;
 
                 if (!bPreserveAlphaNow)
                     cam.Render();
